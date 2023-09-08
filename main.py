@@ -1,6 +1,7 @@
 from flask import Flask, request
 from dotenv import load_dotenv
 import boto3
+import telegram
 
 from db.db import connect_db
 from db.users import get_user, update_user
@@ -16,10 +17,12 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 app = Flask(__name__)
 db = None
 client = None
+bot = None
 
 @ app.route("/", methods = ["GET"])
 def publish():
@@ -29,7 +32,7 @@ def publish():
     return f"Sent an SMS with MessageId : {response['MessageId']}"
 
 @ app.route("/transfer", methods = ["GET", "POST"])
-def transfer():
+async def transfer():
     payload = request.get_json()
 
     if payload["event.type"] == "Transfer" and payload["event"] == "transfer.completed":
@@ -48,10 +51,16 @@ def transfer():
             _transaction = update_transaction(db=db, query={"id" : payload["data"]["id"]}, value={"$set" : {"completed" : True}})
             _transaction = update_transaction(db=db, query={"id" : payload["data"]["id"]}, value={"$set" : {"status" : "SUCCESSFUL"}})
             print(_user, _transaction)
+
+            text = f"Your Withdrawal request ({transaction['ref']}) was successful. A transfer of {transaction['amount']}{user['currency']} has been made to your bank account."
+            await bot.send_message(chat_id=_user["chat-id"], text=text)
         elif payload["data"]["status"] == "FAILED":
             _transaction = update_transaction(db=db, query={"id" : payload["data"]["id"]}, value={"$set" : {"completed" : True}})
             _transaction = update_transaction(db=db, query={"id" : payload["data"]["id"]}, value={"$set" : {"status" : "SUCCESSFUL"}})
             print(_transaction)
+
+            text = f"Your Withdrawal request ({transaction['ref']}) was unsuccessful. You can initiate another withdraw request after some time."
+            await bot.send_message(chat_id=_user["chat-id"], text=text)
 
 def main() -> None:
     global db
@@ -62,6 +71,10 @@ def main() -> None:
     client = boto3.client("sns", aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
     print(f"Connected to AWS Service : {client}")
 
+    global bot
+    bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+    print(f"Connected to Telegram")
+    
     app.run(debug = True)
 
 if __name__ == "__main__":
